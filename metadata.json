@@ -1,0 +1,6 @@
+{
+  "name": "Rubik's Timer by BSB",
+  "description": "An interactive and aesthetically pleasing Rubik's Cube timer. It features a scramble generator powered by Gemini, solve history, detailed statistics, and a visual representation of the scrambled cube.",
+  "requestFramePermissions": [],
+  "prompt": ""
+}
