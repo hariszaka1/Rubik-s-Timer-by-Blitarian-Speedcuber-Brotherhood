@@ -16,7 +16,7 @@ export const ScrambleDisplay: React.FC<ScrambleDisplayProps> = ({ scramble, isLo
                 {isLoading ? (
                      <div className="h-7 w-96 max-w-full bg-slate-300 dark:bg-slate-700/50 animate-pulse rounded-md mt-2 mx-auto"></div>
                 ) : (
-                    <p className="font-mono text-lg sm:text-xl text-sky-800 dark:text-sky-400 mt-1 select-all">{scramble}</p>
+                    <p className="font-mono text-base sm:text-lg text-sky-800 dark:text-sky-400 mt-1 select-all">{scramble}</p>
                 )}
             </div>
             <CubeVisualization scramble={scramble} isLoading={isLoading} cubeType={cubeType} />

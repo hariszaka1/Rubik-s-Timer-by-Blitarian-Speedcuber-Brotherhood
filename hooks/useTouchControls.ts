@@ -1,7 +1,12 @@
 
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, RefObject } from 'react';
 
-export const useTouchControls = (onTouchStart: () => void, onTouchEnd: () => void, disabled = false) => {
+export const useTouchControls = (
+    targetRef: RefObject<HTMLElement>,
+    onTouchStart: () => void,
+    onTouchEnd: () => void,
+    disabled = false
+) => {
     const handleTouchStart = useCallback((e: TouchEvent) => {
         if (disabled) return;
         // Prevent default touch behavior like scrolling or zooming on the timer area
@@ -16,13 +21,18 @@ export const useTouchControls = (onTouchStart: () => void, onTouchEnd: () => voi
     }, [onTouchEnd, disabled]);
 
     useEffect(() => {
+        const element = targetRef.current;
+        if (!element) return;
+
         // Use { passive: false } to allow preventDefault to work
-        window.addEventListener('touchstart', handleTouchStart, { passive: false });
-        window.addEventListener('touchend', handleTouchEnd, { passive: false });
+        element.addEventListener('touchstart', handleTouchStart, { passive: false });
+        element.addEventListener('touchend', handleTouchEnd, { passive: false });
 
         return () => {
-            window.removeEventListener('touchstart', handleTouchStart);
-            window.removeEventListener('touchend', handleTouchEnd);
+            if (element) {
+                element.removeEventListener('touchstart', handleTouchStart);
+                element.removeEventListener('touchend', handleTouchEnd);
+            }
         };
-    }, [handleTouchStart, handleTouchEnd]);
+    }, [targetRef, handleTouchStart, handleTouchEnd]);
 };

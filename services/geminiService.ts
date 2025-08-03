@@ -13,10 +13,17 @@ const getAiClient = () => {
 
 const model = "gemini-2.5-flash";
 
-const SCRAMBLE_BATCH_SIZE = 25;
-const MIN_SCRAMBLE_BUFFER = 10;
+// Fetch more scrambles less often to reduce API calls and avoid hitting rate limits.
+const SCRAMBLE_BATCH_SIZE = 50;
+const MIN_SCRAMBLE_BUFFER = 20;
 
 const replenishmentPromises = new Map<CubeType, Promise<void>>();
+
+// Variables to manage exponential backoff for API calls
+let apiCoolDownUntil = 0;
+const INITIAL_BACKOFF_MS = 5000; // Start with 5 seconds, suitable for free tier limits
+const MAX_BACKOFF_MS = 60000; // Max backoff of 1 minute
+let currentBackoff = INITIAL_BACKOFF_MS;
 
 const getWcaInfo = (type: CubeType): string => {
     switch (type) {
@@ -41,9 +48,16 @@ const getWcaInfo = (type: CubeType): string => {
 }
 
 async function fetchAndStoreScrambles(type: CubeType): Promise<void> {
+    // Check if we are in a cool-down period due to rate limiting
+    if (Date.now() < apiCoolDownUntil) {
+        console.warn(`API is in cool-down. Skipping scramble fetch for ${type}.`);
+        return;
+    }
+
     const ai = getAiClient();
     if (!ai) {
-        throw new Error("Attempted to fetch scrambles without an API key.");
+        console.log("Gemini API key not configured. Skipping online scramble fetch.");
+        return;
     }
 
     try {
@@ -75,12 +89,29 @@ ${getWcaInfo(type)}
             }
         });
         
-        const rawText = response.text.trim();
-        const responseJson = JSON.parse(rawText);
+        // If the API call was successful, reset the backoff state.
+        apiCoolDownUntil = 0;
+        currentBackoff = INITIAL_BACKOFF_MS;
+        
+        const rawText = response.text?.trim();
+        if (!rawText) {
+             console.warn(`API returned an empty response for ${type}.`);
+             return;
+        }
+
+        let responseJson;
+        try {
+            responseJson = JSON.parse(rawText);
+        } catch (e) {
+            console.error(`Failed to parse JSON response from API for ${type}. Response text:`, rawText);
+            return;
+        }
+
         const scrambles = responseJson.scrambles;
 
         if (!scrambles || !Array.isArray(scrambles) || scrambles.length === 0) {
-            throw new Error("API returned invalid data format or empty scrambles array.");
+            console.warn("API returned invalid data format or empty scrambles array.");
+            return;
         }
 
         // A more general validation regex for various WCA notations
@@ -94,7 +125,18 @@ ${getWcaInfo(type)}
         }
     } catch (error) {
         console.error(`Error fetching and storing ${type} scrambles:`, error);
-        throw new Error(`Failed to generate and store ${type} scrambles from Gemini API.`);
+        
+        // Check if the error is a rate limit error (429) and apply backoff.
+        const errorMessage = JSON.stringify(error); // Stringify to catch nested properties
+        if (errorMessage.includes('429') || errorMessage.includes('RESOURCE_EXHAUSTED')) {
+            console.warn(`Rate limit hit. Activating API cool-down for ${currentBackoff / 1000} seconds.`);
+            apiCoolDownUntil = Date.now() + currentBackoff;
+            // Increase backoff for the next time it's triggered.
+            currentBackoff = Math.min(currentBackoff * 2, MAX_BACKOFF_MS);
+        }
+        
+        // Do not re-throw the error. This allows the application to gracefully fall back
+        // to the local scramble generator if the API is unavailable or rate-limited.
     }
 }
 
@@ -115,7 +157,7 @@ function replenishIfNeeded(type: CubeType): Promise<void> {
             }
         } catch (error) {
             console.error(`Failed to replenish ${type} scramble buffer:`, error);
-            throw error;
+            // Do not re-throw, to allow fallback to local generator
         } finally {
             replenishmentPromises.delete(type);
         }
@@ -129,6 +171,7 @@ export async function getNextScramble(type: CubeType): Promise<string> {
     const dbScramble = await getScrambleFromDb(type);
 
     replenishIfNeeded(type).catch(err => {
+        // This catch is a safeguard, but errors within replenishIfNeeded are now handled internally.
         console.warn(`Background ${type} scramble replenishment failed.`, err.message);
     });
 
@@ -137,13 +180,15 @@ export async function getNextScramble(type: CubeType): Promise<string> {
     }
     
     try {
-        // Wait for the replenishment attempt to finish.
+        // Wait for any ongoing replenishment attempt to finish.
+        // This won't throw an error on API failure because we handled it inside.
         await replenishIfNeeded(type);
         const newDbScramble = await getScrambleFromDb(type);
         if (newDbScramble) {
             return newDbScramble;
         }
     } catch (err) {
+        // This catch is for unexpected errors in DB access or promise management, not the API.
         console.warn(`Foreground ${type} replenishment failed, falling back to local generation.`, err.message);
     }
     

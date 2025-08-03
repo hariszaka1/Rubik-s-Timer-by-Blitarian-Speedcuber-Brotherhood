@@ -1,11 +1,16 @@
 
 import React, { useMemo } from 'react';
-import type { Solve, CubeType } from '../types';
+import type { Solve, CubeType, Competition, User } from '../types';
 import { formatTime } from '../utils/time';
 
 interface StatsProps {
     solves: Solve[];
     cubeType: CubeType;
+    activeCompetition: Competition | null;
+    allCompetitionSolves: Solve[];
+    users: User[];
+    viewingUserId: number;
+    currentUser: User;
 }
 
 type StatResult = number | 'DNF' | null;
@@ -61,7 +66,7 @@ const StatItem: React.FC<{ label: string; value: string }> = ({ label, value }) 
     </div>
 );
 
-export const Stats: React.FC<StatsProps> = ({ solves, cubeType }) => {
+export const Stats: React.FC<StatsProps> = ({ solves, cubeType, activeCompetition, allCompetitionSolves, users, viewingUserId, currentUser }) => {
     const isFMC = cubeType === '3x3 FMC';
 
     const formatStat = (value: StatResult): string => {
@@ -71,8 +76,21 @@ export const Stats: React.FC<StatsProps> = ({ solves, cubeType }) => {
         return formatTime(value);
     };
 
+    const { solvesForStats, viewingUser } = useMemo(() => {
+        if (activeCompetition) {
+            const relevantSolves = allCompetitionSolves
+                .filter(s => s.userId === viewingUserId && s.cubeType === cubeType)
+                .sort((a, b) => b.date.getTime() - a.date.getTime());
+            const user = users.find(u => u.id === viewingUserId);
+            return { solvesForStats: relevantSolves, viewingUser: user };
+        }
+        // Not in competition mode, use the session solves for the current user
+        return { solvesForStats: solves, viewingUser: currentUser };
+    }, [activeCompetition, allCompetitionSolves, solves, viewingUserId, cubeType, users, currentUser]);
+
+
     const { solveCount, best, worst, mean, ao5, ao12, ao50 } = useMemo(() => {
-        const relevantSolves = solves;
+        const relevantSolves = solvesForStats; // Already filtered and sorted
         
         if (isFMC) {
             const moveCounts = relevantSolves.map(s => s.time);
@@ -108,11 +126,19 @@ export const Stats: React.FC<StatsProps> = ({ solves, cubeType }) => {
             ao12: calculateAoN(relevantSolves, 12),
             ao50: calculateAoN(relevantSolves, 50),
         };
-    }, [solves, isFMC]);
+    }, [solvesForStats, isFMC]);
+
+    const titleText = useMemo(() => {
+        if (activeCompetition && viewingUser) {
+            return `Statistics for ${viewingUser.name}`;
+        }
+        return "Statistics";
+    }, [activeCompetition, viewingUser]);
+
 
     return (
         <div>
-            <h2 className="text-xl font-bold text-slate-900 dark:text-slate-200 mb-1">Statistics</h2>
+            <h2 className="text-xl font-bold text-slate-900 dark:text-slate-200 mb-1">{titleText}</h2>
             <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">For {cubeType}</p>
             <div className="bg-white/30 dark:bg-black/20 backdrop-blur-md border border-slate-900/10 dark:border-white/20 rounded-lg p-4 space-y-3">
                 <div className="flex justify-between items-baseline">

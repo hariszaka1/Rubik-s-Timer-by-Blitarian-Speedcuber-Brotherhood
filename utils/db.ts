@@ -1,13 +1,17 @@
 
-import type { CubeType, User, Solve, Penalty } from '../types';
+import type { CubeType, User, Solve, Penalty, Room } from '../types';
 
 const DB_NAME = 'rubiks-timer-db';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const SCRAMBLE_STORE = 'scrambles';
 const USERS_STORE = 'users';
 const SOLVES_STORE = 'solves';
+const ROOMS_STORE = 'rooms';
+
 const SCRAMBLE_TYPE_INDEX = 'type_index';
 const SOLVE_USER_INDEX = 'user_index';
+const SOLVE_ROOM_INDEX = 'room_index';
+
 
 let db: IDBDatabase | null = null;
 
@@ -49,11 +53,23 @@ function openDB(): Promise<IDBDatabase> {
                     solveStore.createIndex(SOLVE_USER_INDEX, 'userId', { unique: false });
                 }
             }
+            if (oldVersion < 4) {
+                 if (!dbInstance.objectStoreNames.contains(ROOMS_STORE)) {
+                    dbInstance.createObjectStore(ROOMS_STORE, { keyPath: 'code' });
+                }
+                const transaction = (event.target as IDBOpenDBRequest).transaction;
+                if(transaction) {
+                    const solveStore = transaction.objectStore(SOLVES_STORE);
+                    if (!solveStore.indexNames.contains(SOLVE_ROOM_INDEX)) {
+                        solveStore.createIndex(SOLVE_ROOM_INDEX, 'roomId', { unique: false });
+                    }
+                }
+            }
         };
     });
 }
 
-// Scramble Functions (existing)
+// Scramble Functions
 export async function addScrambles(scrambles: string[], type: CubeType): Promise<void> {
     const db = await openDB();
     const transaction = db.transaction(SCRAMBLE_STORE, 'readwrite');
@@ -154,10 +170,72 @@ export async function deleteUser(userId: number): Promise<void> {
     });
 }
 
+// --- Room Functions ---
+
+// Creates a 6-character alphanumeric code.
+const generateRoomCode = (): string => {
+    const chars = 'ABCDEFGHIJKLMNPQRSTUVWXYZ123456789';
+    let result = '';
+    for (let i = 0; i < 6; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+};
+
+
+export async function addRoom(name: string): Promise<Room> {
+    const db = await openDB();
+    const transaction = db.transaction(ROOMS_STORE, 'readwrite');
+    const store = transaction.objectStore(ROOMS_STORE);
+    
+    return new Promise(async (resolve, reject) => {
+        // Ensure code is unique (highly unlikely to collide, but good practice)
+        let code = generateRoomCode();
+        let existing = await getRoom(code);
+        while (existing) {
+            code = generateRoomCode();
+            existing = await getRoom(code);
+        }
+        
+        const newRoom: Omit<Room, 'createdAt'> & {createdAt: number} = { name, code, createdAt: Date.now() };
+
+        const request = store.add(newRoom);
+        request.onsuccess = () => {
+            resolve({ ...newRoom, createdAt: new Date(newRoom.createdAt) });
+        };
+        request.onerror = (e) => {
+            console.error("Error adding room:", request.error);
+            reject(request.error);
+        };
+    });
+}
+
+export async function getRoom(code: string): Promise<Room | null> {
+    const db = await openDB();
+    const transaction = db.transaction(ROOMS_STORE, 'readonly');
+    const store = transaction.objectStore(ROOMS_STORE);
+
+    return new Promise((resolve, reject) => {
+        const request = store.get(code);
+        request.onerror = () => reject(request.error);
+        request.onsuccess = () => {
+            if (request.result) {
+                const roomData = request.result;
+                resolve({ ...roomData, createdAt: new Date(roomData.createdAt) });
+            } else {
+                resolve(null);
+            }
+        };
+    });
+}
 
 // Solve Functions
-interface StorableSolve extends Omit<Solve, 'date'> {
+interface StorableSolve extends Omit<Solve, 'date' | 'createdAt'> {
     date: number; // Store date as timestamp
+}
+
+const fromStorableSolve = (s: StorableSolve): Solve => {
+    return {...s, date: new Date(s.date), penalty: s.penalty || 'none' };
 }
 
 export async function addSolve(solveData: Omit<Solve, 'id' | 'date'>): Promise<Solve> {
@@ -201,7 +279,6 @@ export async function updateSolve(solve: Solve): Promise<void> {
     });
 }
 
-
 export async function getSolvesForUser(userId: number): Promise<Solve[]> {
     const db = await openDB();
     const transaction = db.transaction(SOLVES_STORE, 'readonly');
@@ -212,12 +289,28 @@ export async function getSolvesForUser(userId: number): Promise<Solve[]> {
     return new Promise((resolve, reject) => {
         const request = index.getAll(range);
         request.onsuccess = () => {
-            const results = request.result.map(s => ({...s, date: new Date(s.date), penalty: s.penalty || 'none'}));
-            resolve(results);
+            resolve(request.result.map(fromStorableSolve));
         };
         request.onerror = () => reject(request.error);
     });
 }
+
+export async function getSolvesForRoom(roomId: string): Promise<Solve[]> {
+    const db = await openDB();
+    const transaction = db.transaction(SOLVES_STORE, 'readonly');
+    const store = transaction.objectStore(SOLVES_STORE);
+    const index = store.index(SOLVE_ROOM_INDEX);
+    const range = IDBKeyRange.only(roomId);
+    
+    return new Promise((resolve, reject) => {
+        const request = index.getAll(range);
+        request.onsuccess = () => {
+            resolve(request.result.map(fromStorableSolve));
+        };
+        request.onerror = () => reject(request.error);
+    });
+}
+
 
 export async function getAllSolves(): Promise<Solve[]> {
     const db = await openDB();
@@ -226,8 +319,7 @@ export async function getAllSolves(): Promise<Solve[]> {
      return new Promise((resolve, reject) => {
         const request = store.getAll();
         request.onsuccess = () => {
-             const results = request.result.map(s => ({...s, date: new Date(s.date), penalty: s.penalty || 'none'}));
-            resolve(results);
+            resolve(request.result.map(fromStorableSolve));
         };
         request.onerror = () => reject(request.error);
     });

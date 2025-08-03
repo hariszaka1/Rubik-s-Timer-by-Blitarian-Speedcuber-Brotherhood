@@ -10,6 +10,18 @@ export interface User {
 
 export type Penalty = 'none' | '+2' | 'DNF';
 
+export interface Room {
+  code: string;
+  name: string;
+  createdAt: Date;
+}
+
+export interface Competition {
+  name: string;
+  participantIds: number[];
+  scrambles: Partial<Record<CubeType, string>>;
+}
+
 export interface Solve {
   id: number;
   userId: number;
@@ -20,9 +32,10 @@ export interface Solve {
   penalty: Penalty;
   solution?: string; // For FMC solves
   fmcTime?: number; // Time taken for FMC solve in ms
+  roomId?: string; // To associate solve with a room
 }
 
-export type TimerStatus = 'idle' | 'ready' | 'running' | 'stopped' | 'inspecting';
+export type TimerStatus = 'idle' | 'ready' | 'running' | 'inspecting';
 
 export type Face = 'U' | 'D' | 'L' | 'R' | 'F' | 'B';
 

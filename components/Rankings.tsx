@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import * as db from '../utils/db';
 import { formatTime } from '../utils/time';
-import type { User, Solve, CubeType } from '../types';
+import type { User, Solve, CubeType, Room, Competition } from '../types';
 import { CUBE_TYPES } from '../types';
 import { DownloadIcon } from './Icons';
 
@@ -81,9 +81,15 @@ interface Leaderboard {
     rankings: RankingData[];
 }
 
+interface RankingsProps {
+    activeRoom: Room | null;
+    activeCompetition: Competition | null;
+}
+
+
 const GUEST_USER: User = { id: 0, name: 'Guest' };
 
-export const Rankings: React.FC = () => {
+export const Rankings: React.FC<RankingsProps> = ({ activeRoom, activeCompetition }) => {
     const [allUsers, setAllUsers] = useState<User[]>([]);
     const [allSolves, setAllSolves] = useState<Solve[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -91,13 +97,28 @@ export const Rankings: React.FC = () => {
     useEffect(() => {
         const fetchData = async () => {
             setIsLoading(true);
-            const [dbUsers, solves] = await Promise.all([db.getUsers(), db.getAllSolves()]);
-            setAllUsers([GUEST_USER, ...dbUsers]);
-            setAllSolves(solves);
+            const [dbUsers, solves] = await Promise.all([
+                db.getUsers(),
+                activeRoom 
+                    ? db.getSolvesForRoom(activeRoom.code) 
+                    : db.getAllSolves() // For local or competition, fetch all and filter client-side
+            ]);
+            
+            const usersWithGuest = [GUEST_USER, ...dbUsers];
+            setAllUsers(usersWithGuest);
+
+            if (activeCompetition) {
+                 // Filter solves by participants if in a competition
+                const participantIds = new Set(activeCompetition.participantIds);
+                setAllSolves(solves.filter(s => participantIds.has(s.userId)));
+            } else {
+                setAllSolves(solves);
+            }
+
             setIsLoading(false);
         };
         fetchData();
-    }, []);
+    }, [activeRoom, activeCompetition]);
 
     const leaderboards = useMemo<Leaderboard[]>(() => {
         const cubeTypesWithSolves = [...new Set(allSolves.map(s => s.cubeType))] as CubeType[];
@@ -155,6 +176,8 @@ export const Rankings: React.FC = () => {
             const cellStr = String(cell).replace(/"/g, '""');
             return `"${cellStr}"`;
         };
+        
+        const mode = activeRoom ? `room_${activeRoom.code}` : activeCompetition ? `competition_${activeCompetition.name.replace(/ /g, '_')}` : 'local';
 
         const csvRows = [
             headers.join(','),
@@ -173,7 +196,7 @@ export const Rankings: React.FC = () => {
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.setAttribute('href', url);
-        link.setAttribute('download', `leaderboard_${cubeType.replace(/ /g, '_')}.csv`);
+        link.setAttribute('download', `leaderboard_${cubeType.replace(/ /g, '_')}_${mode}.csv`);
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -191,13 +214,24 @@ export const Rankings: React.FC = () => {
     if (leaderboards.length === 0) {
         return (
              <div className="flex items-center justify-center h-48 bg-white/30 dark:bg-black/20 backdrop-blur-md border border-slate-900/10 dark:border-white/20 rounded-lg">
-                <p className="text-slate-600 dark:text-slate-500">No solves recorded for any puzzle yet.</p>
+                <p className="text-slate-600 dark:text-slate-500">{activeRoom ? 'No solves recorded for this room yet.' : activeCompetition ? 'No solves recorded in this competition yet.' : 'No solves recorded for any puzzle yet.'}</p>
             </div>
         )
     }
+    
+    const Title = () => {
+        if (activeRoom) {
+            return <h2 className="text-2xl font-bold text-center -mb-8">Room Leaderboard: <span className="text-sky-600 dark:text-sky-400">{activeRoom.name}</span></h2>
+        }
+        if (activeCompetition) {
+            return <h2 className="text-2xl font-bold text-center -mb-8">Competition: <span className="text-purple-600 dark:text-purple-400">{activeCompetition.name}</span></h2>
+        }
+        return <h2 className="text-2xl font-bold text-center -mb-8">Global Leaderboard</h2>
+    };
 
     return (
         <div className="space-y-12">
+            <Title />
             {leaderboards.map(({ cubeType, rankings }) => (
                 <div key={cubeType}>
                     <div className="flex justify-between items-center mb-4">
@@ -205,7 +239,7 @@ export const Rankings: React.FC = () => {
                         {rankings.length > 0 && (
                             <button
                                 onClick={() => handleExportToCSV(rankings, cubeType)}
-                                className="flex items-center gap-2 px-3 py-1.5 text-sm bg-white/40 dark:bg-slate-800/40 hover:bg-white/60 dark:hover:bg-slate-800/60 active:bg-white/80 dark:active:bg-slate-800/90 backdrop-blur-sm border border-slate-900/10 dark:border-white/20 rounded-lg transition-colors text-black dark:text-slate-200 font-medium"
+                                className="flex items-center gap-2 px-3 py-1.5 text-sm bg-white/40 dark:bg-slate-800/40 hover:bg-white/60 dark:hover:bg-slate-800/60 active:bg-white/80 dark:active:bg-slate-800/90 backdrop-blur-sm border border-slate-900/10 dark:border-white/20 rounded-lg transition-colors text-slate-800 dark:text-slate-200 font-medium"
                                 aria-label={`Export ${cubeType} leaderboard to CSV`}
                                 title="Export to CSV"
                             >
@@ -215,17 +249,17 @@ export const Rankings: React.FC = () => {
                         )}
                     </div>
                     <div className="bg-white/30 dark:bg-black/20 backdrop-blur-md border border-slate-900/10 dark:border-white/20 rounded-lg overflow-hidden">
-                        <div className="max-h-[30rem] overflow-y-auto">
-                            <table className="w-full text-sm text-left">
+                        <div className="max-h-[30rem] overflow-auto">
+                            <table className="w-full min-w-[48rem] text-sm text-left">
                                 <thead className="text-xs text-slate-600 dark:text-slate-400 uppercase bg-black/5 dark:bg-black/30 backdrop-blur-sm sticky top-0">
                                     <tr>
-                                        <th scope="col" className="px-4 py-3 w-8">Rank</th>
-                                        <th scope="col" className="px-4 py-3">User</th>
-                                        <th scope="col" className="px-4 py-3">Solves</th>
-                                        <th scope="col" className="px-4 py-3">Best</th>
-                                        <th scope="col" className="px-4 py-3">Worst</th>
-                                        <th scope="col" className="px-4 py-3">Current Ao5</th>
-                                        <th scope="col" className="px-4 py-3">Last 5</th>
+                                        <th scope="col" className="px-4 py-3 w-8 whitespace-nowrap">Rank</th>
+                                        <th scope="col" className="px-4 py-3 whitespace-nowrap">User</th>
+                                        <th scope="col" className="px-4 py-3 whitespace-nowrap">Solves</th>
+                                        <th scope="col" className="px-4 py-3 whitespace-nowrap">Best</th>
+                                        <th scope="col" className="px-4 py-3 whitespace-nowrap">Worst</th>
+                                        <th scope="col" className="px-4 py-3 whitespace-nowrap">Current Ao5</th>
+                                        <th scope="col" className="px-4 py-3 whitespace-nowrap">Last 5</th>
                                     </tr>
                                 </thead>
                                 <tbody>
